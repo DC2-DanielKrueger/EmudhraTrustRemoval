@@ -46,19 +46,26 @@ java src/FullCheck.java
 No arguments, changes nothing. It runs, each in its own JVM:
 
 1. `CheckJavaTrust`: the JVM running FullCheck rejects both compromised chains.
-2. `RemoveEmudhraRoots --all-jdks` as a dry run: neither root is in `/etc/ssl/cert.pem`, this JVM's `cacerts` or any installed JDK's.
+2. `RemoveEmudhraRoots --all-jdks` as a dry run: neither root is in the OS CA bundle, this JVM's `cacerts` or any installed JDK's.
 3. `CheckInstalledNode`: every installed Node.js is a fixed release and rejects both chains.
 
 ```
 ############ Summary
   GOOD   This JVM rejects the compromised chains
-  GOOD   Trust stores (/etc/ssl/cert.pem, this JVM, installed JDKs)
+  GOOD   Trust stores (OS CA bundle, this JVM, installed JDKs)
   GOOD   Installed Node.js
 
 ==> GOOD: no exposure to the eMudhra CA compromise found.
 ```
 
-Exit code: `0` all GOOD, `1` any BAD, `2` a check could not run. On Java 11-21, run it from the repository root (or `src/`) so it finds the other tools; Java 22+ and compiled classes work from anywhere.
+Exit code: `0` all GOOD, `1` any BAD, `2` a check could not run.
+
+To check a container image (the images are usually JREs without a compiler), compile on the host and mount the classes:
+
+```sh
+javac --release 11 -d /tmp/emudhra src/*.java
+docker run --rm -v /tmp/emudhra:/emudhra:ro --entrypoint java <image> -cp /emudhra FullCheck
+``` On Java 11-21, run it from the repository root (or `src/`) so it finds the other tools; Java 22+ and compiled classes work from anywhere.
 
 ## CheckJavaTrust: check what a JVM trusts
 
@@ -116,7 +123,7 @@ java src/RemoveEmudhraRoots.java --all-jdks          # dry run: report only
 sudo "$(/usr/libexec/java_home)/bin/java" src/RemoveEmudhraRoots.java --apply
 ```
 
-- Targets the given files, or by default `/etc/ssl/cert.pem` and the running JVM's `cacerts`. `--all-jdks` adds every JDK under `/Library/Java/JavaVirtualMachines` and `~/Library/Java/JavaVirtualMachines`.
+- Targets the given files, or by default the OS CA bundles that exist and the running JVM's `cacerts`. OS bundles: `/etc/ssl/cert.pem` (macOS, Alpine), `/etc/ssl/certs/ca-certificates.crt` (Debian, Ubuntu, Alpine), `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` (RHEL, Fedora), `/etc/ssl/ca-bundle.pem` (openSUSE). `--all-jdks` adds every JDK under `/Library/Java/JavaVirtualMachines`, `~/Library/Java/JavaVirtualMachines` and `/usr/lib/jvm`. Paths that link to the same file are processed once.
 - Matches the roots by SHA-256 fingerprint, so vendor-specific aliases don't matter. Handles PEM bundles and PKCS12/JKS keystores (JKS for Java 8), keeping each in its format.
 - **Dry run unless `--apply`.** With `--apply` it writes a `<file>.bak-emsign` backup (never overwriting an existing one), rewrites the file in place (keeping owner and permissions), and verifies the result. Running it again changes nothing.
 - Exit code: `0` clean, `1` a root remains (in a dry run: would be removed), `2` error (for example, a root-owned file without `sudo`).
@@ -124,7 +131,7 @@ sudo "$(/usr/libexec/java_home)/bin/java" src/RemoveEmudhraRoots.java --apply
 
 To undo, copy the backup back: `sudo cp -p /etc/ssl/cert.pem.bak-emsign /etc/ssl/cert.pem`.
 
-**Updates restore the roots.** A JDK, IDE or macOS update replaces these files. Re-run the dry run after updating until vendors ship fixed trust stores. JDKs bundled in applications (IDEs, profilers) are not found by `--all-jdks`; pass their `cacerts` explicitly.
+**Updates restore the roots.** A JDK, IDE or OS update replaces these files; on Linux, `update-ca-certificates` / `update-ca-trust` also regenerate the OS bundle, so prefer the distribution's fixed `ca-certificates` package there. Re-run the dry run after updating until vendors ship fixed trust stores. JDKs bundled in applications (IDEs, profilers) are not found by `--all-jdks`; pass their `cacerts` explicitly.
 
 ## License
 

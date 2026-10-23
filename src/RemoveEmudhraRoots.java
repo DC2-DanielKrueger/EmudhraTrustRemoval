@@ -17,6 +17,8 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +34,8 @@ import java.util.regex.Pattern;
  * java RemoveEmudhraRoots.java [--apply] [--all-jdks] [--storepass PASS] [FILE...]
  * </pre>
  *
- * Without FILEs it targets /etc/ssl/cert.pem and the running JVM's cacerts. Dry run unless
+ * Without FILEs it targets the OS CA bundles that exist (macOS, Debian/Ubuntu, Alpine, RHEL, openSUSE
+ * locations) and the running JVM's cacerts. Dry run unless
  * --apply. Exit code 0 if every target is clean (afterwards, with --apply), 1 if one still holds a
  * root, 2 on errors.
  */
@@ -45,7 +48,18 @@ public class RemoveEmudhraRoots {
         BAD_ROOTS.put("D7A7A0FB5D7E2731D771E9484EBCDEF71D5F0C3E0A2948782BC83EE0EA699EF4", "AAA Certificate Services");
     }
 
+    /** OS CA bundles checked by default when present (several are symlinks to one file on some distributions). */
+    private static final String[] OS_BUNDLES = {
+            "/etc/ssl/cert.pem",                                  // macOS, Alpine, BSD
+            "/etc/ssl/certs/ca-certificates.crt",                 // Debian, Ubuntu, Alpine, Arch
+            "/etc/pki/tls/certs/ca-bundle.crt",                   // RHEL, Fedora
+            "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",  // RHEL, Fedora
+            "/etc/ssl/ca-bundle.pem",                             // openSUSE
+    };
+
     private static final String BACKUP_SUFFIX = ".bak-emsign";
+
+    private static final Set<Path> SEEN_REAL_PATHS = new HashSet<>();
 
     // A PEM block plus any comment header before it; END CERTIFICATE closes the block.
     private static final Pattern PEM_CERT = Pattern.compile(
@@ -65,14 +79,15 @@ public class RemoveEmudhraRoots {
                 case "-h": case "--help": usage(); return;
                 default:
                     if (args[i].startsWith("-")) { System.err.println("unknown option " + args[i]); usage(); System.exit(2); }
-                    targets.add(Paths.get(args[i]));
+                    Path given = Paths.get(args[i]);
+                    if (Files.isRegularFile(given)) addIfPresent(targets, given); else targets.add(given); // missing: reported as an error
             }
         }
         if (targets.isEmpty()) {
-            targets.add(Paths.get("/etc/ssl/cert.pem"));
-            targets.add(jvmCacerts(Paths.get(System.getProperty("java.home"))));
+            for (String bundle : OS_BUNDLES) addIfPresent(targets, Paths.get(bundle));
+            addIfPresent(targets, jvmCacerts(Paths.get(System.getProperty("java.home"))));
         }
-        if (allJdks) targets.addAll(installedJdkCacerts());
+        if (allJdks) for (Path cacerts : installedJdkCacerts()) addIfPresent(targets, cacerts);
 
         System.out.println(apply ? "Mode: APPLY (files are changed, a " + BACKUP_SUFFIX + " backup is kept)"
                                  : "Mode: dry run (nothing is changed; re-run with --apply)");
@@ -228,17 +243,33 @@ public class RemoveEmudhraRoots {
 
     private static List<Path> installedJdkCacerts() throws IOException {
         List<Path> result = new ArrayList<>();
-        for (String root : new String[]{"/Library/Java/JavaVirtualMachines", System.getProperty("user.home") + "/Library/Java/JavaVirtualMachines"}) {
-            Path dir = Paths.get(root);
+        Map<String, String> roots = new LinkedHashMap<>(); // JDK parent directory -> JDK home inside each entry
+        roots.put("/Library/Java/JavaVirtualMachines", "Contents/Home");
+        roots.put(System.getProperty("user.home") + "/Library/Java/JavaVirtualMachines", "Contents/Home");
+        roots.put("/usr/lib/jvm", "");
+        for (Map.Entry<String, String> root : roots.entrySet()) {
+            Path dir = Paths.get(root.getKey());
             if (!Files.isDirectory(dir)) continue;
             try (DirectoryStream<Path> jdks = Files.newDirectoryStream(dir)) {
                 for (Path jdk : jdks) {
-                    Path cacerts = jvmCacerts(jdk.resolve("Contents/Home"));
+                    Path cacerts = jvmCacerts(root.getValue().isEmpty() ? jdk : jdk.resolve(root.getValue()));
                     if (Files.isRegularFile(cacerts)) result.add(cacerts);
                 }
             }
         }
         return result;
+    }
+
+    /** Adds an existing file once per real path, so symlinked bundles and JDK aliases are processed once. */
+    private static void addIfPresent(Set<Path> targets, Path candidate) {
+        if (!Files.isRegularFile(candidate)) return;
+        Path real;
+        try {
+            real = candidate.toRealPath();
+        } catch (IOException e) {
+            real = candidate.toAbsolutePath();
+        }
+        if (SEEN_REAL_PATHS.add(real)) targets.add(candidate);
     }
 
     private static String sha256(X509Certificate c) throws Exception {
@@ -250,9 +281,9 @@ public class RemoveEmudhraRoots {
 
     private static void usage() {
         System.out.println("usage: java RemoveEmudhraRoots.java [--apply] [--all-jdks] [--storepass PASS] [FILE...]");
-        System.out.println("  FILE        PEM bundle or Java keystore; default /etc/ssl/cert.pem and this JVM's cacerts");
+        System.out.println("  FILE        PEM bundle or Java keystore; default: the OS CA bundles present and this JVM's cacerts");
         System.out.println("  --apply     change the files (default is a dry run); keeps a " + BACKUP_SUFFIX + " backup");
-        System.out.println("  --all-jdks  also every JDK under /Library/Java/JavaVirtualMachines and ~/Library/Java/JavaVirtualMachines");
+        System.out.println("  --all-jdks  also every JDK under /Library/Java/JavaVirtualMachines, ~/Library/Java/JavaVirtualMachines and /usr/lib/jvm");
         System.out.println("  exit code   0 clean, 1 a root remains, 2 error (e.g. needs sudo)");
     }
 }

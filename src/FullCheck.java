@@ -21,7 +21,7 @@ public class FullCheck {
     public static void main(String[] args) throws Exception {
         Map<String, String[]> checks = new LinkedHashMap<>();
         checks.put("This JVM rejects the compromised chains", new String[]{"CheckJavaTrust"});
-        checks.put("Trust stores (/etc/ssl/cert.pem, this JVM, installed JDKs)", new String[]{"RemoveEmudhraRoots", "--all-jdks"});
+        checks.put("Trust stores (OS CA bundle, this JVM, installed JDKs)", new String[]{"RemoveEmudhraRoots", "--all-jdks"});
         checks.put("Installed Node.js", new String[]{"CheckInstalledNode"});
 
         Map<String, Integer> results = new LinkedHashMap<>();
