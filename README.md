@@ -1,6 +1,10 @@
 # eMudhra trust removal
 
-Two dependency-free Java tools for the October 2026 eMudhra CA compromise: one checks whether a JVM (or any trust store) still trusts the compromised certificates, the other removes the affected roots from PEM bundles and Java keystores.
+Dependency-free Java tools for the October 2026 eMudhra CA compromise:
+
+- **CheckJavaTrust** checks whether a JVM (or any trust store) still trusts the compromised certificates.
+- **CheckInstalledNode** finds installed Node.js versions and checks that each is a fixed release.
+- **RemoveEmudhraRoots** removes the affected roots from PEM bundles and Java keystores.
 
 ## Background
 
@@ -9,6 +13,7 @@ The private keys of eight eMudhra intermediate CAs (EM DV/OV/EV TLS CA and EM OV
 Browsers block the intermediates through their own revocation mechanisms. Most other clients do not check revocation, so they stay exposed until the roots are removed from their trust store:
 
 - **Java**: every JDK/JRE uses its own `cacerts`, not the OS store.
+- **Node.js**: bundles its own root certificates, so only a fixed Node release helps.
 - **macOS command-line tools** (`/usr/bin/curl`, `git`, `openssl`, system `python3`) read `/etc/ssl/cert.pem`, which Apple had not updated as of macOS 27.0.1.
 
 Details: <https://emudhra.we-have-a-problem.com/> and [Mozilla bug 2083449](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449).
@@ -26,7 +31,7 @@ Java 11 or newer. A JDK runs the files directly (`java src/CheckJavaTrust.java`)
 
 ```sh
 javac --release 11 -d out src/*.java
-java -cp out CheckJavaTrust
+java -cp out CheckJavaTrust          # or CheckInstalledNode, RemoveEmudhraRoots
 ```
 
 `RemoveEmudhraRoots` still edits the trust stores of older JDKs, including Java 8 (`jre/lib/security/cacerts`, JKS); it just has to run on Java 11 or newer.
@@ -54,6 +59,31 @@ In a JRE-only container, compile on the host and mount the classes:
 javac --release 11 -d /tmp/check-java-trust src/CheckJavaTrust.java
 docker run --rm -v /tmp/check-java-trust:/check-java-trust:ro --entrypoint java <image> -cp /check-java-trust CheckJavaTrust
 ```
+
+## CheckInstalledNode: check installed Node.js versions
+
+```sh
+java src/CheckInstalledNode.java                     # every node it can find
+java src/CheckInstalledNode.java /path/to/node       # specific binaries
+java src/CheckInstalledNode.java --offline           # versions only, no network
+```
+
+It looks for `node` on `PATH` and in nvm, fnm, Volta, asdf, mise, Homebrew (`/opt/homebrew`, `/usr/local`, `node@*`) and `/usr/bin`, counting each installation once even when several paths link to it. Each one gets two checks:
+
+1. **Version**: at least the first fixed release of its line. Only three lines got a fix:
+
+   | Line | Fixed from |
+   |---|---|
+   | 22 | 22.23.4 |
+   | 24 | 24.22.1 |
+   | 26 | 26.12.1 |
+
+   Lines 20, 23, 25 and older are end-of-life and got no fix, so they are always BAD. Lines newer than 26 are judged by the live check alone.
+2. **Live**: that `node` binary requests both eMudhra test hosts and must reject them. This also catches `NODE_EXTRA_CA_CERTS` or `NODE_OPTIONS=--use-system-ca` pulling a bad root in from elsewhere.
+
+An installation is GOOD only if both checks pass. Builds that use an external CA bundle instead of Node's own (Homebrew's, for example) can reject the test hosts on an unfixed version; they stay BAD, because a different CA bundle makes them trust the roots again. The fixed releases also block the compromised intermediates themselves.
+
+Exit code: `0` all GOOD or no Node.js installed, `1` any BAD, `2` inconclusive.
 
 ## RemoveEmudhraRoots: remove the roots
 
