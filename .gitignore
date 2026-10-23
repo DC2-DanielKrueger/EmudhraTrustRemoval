@@ -1,0 +1,20 @@
+# IDE and build output
+.idea/
+*.iml
+out/
+build/
+*.class
+
+# Never commit trust stores, keys or certificates (e.g. copies made while testing)
+*.bak-emsign
+*.pem
+*.crt
+*.cer
+*.der
+*.key
+*.jks
+*.p12
+*.pfx
+*.keystore
+*.truststore
+cacerts*

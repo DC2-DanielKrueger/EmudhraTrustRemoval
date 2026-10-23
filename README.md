@@ -1,0 +1,77 @@
+# eMudhra trust removal
+
+Two dependency-free Java tools for the October 2026 eMudhra CA compromise: one checks whether a JVM (or any trust store) still trusts the compromised certificates, the other removes the affected roots from PEM bundles and Java keystores.
+
+## Background
+
+The private keys of eight eMudhra intermediate CAs (EM DV/OV/EV TLS CA and EM OV CS CA, generations G3B and G3C) can be recovered from their public certificates. Each intermediate exists twice: under eMudhra's **emSign ECC Root CA - G3** and cross-signed by Sectigo's **AAA Certificate Services**. A client that trusts either root accepts certificates forged with those keys.
+
+Browsers block the intermediates through their own revocation mechanisms. Most other clients do not check revocation, so they stay exposed until the roots are removed from their trust store:
+
+- **Java**: every JDK/JRE uses its own `cacerts`, not the OS store.
+- **macOS command-line tools** (`/usr/bin/curl`, `git`, `openssl`, system `python3`) read `/etc/ssl/cert.pem`, which Apple had not updated as of macOS 27.0.1.
+
+Details: <https://emudhra.we-have-a-problem.com/> and [Mozilla bug 2083449](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449).
+
+| Root | SHA-256 fingerprint |
+|---|---|
+| emSign ECC Root CA - G3 | `86:A1:EC:BA:08:9C:4A:8D:3B:BE:27:34:C6:12:BA:34:1D:81:3E:04:3C:F9:E8:A8:62:CD:5C:57:A3:6B:BE:6B` |
+| AAA Certificate Services | `D7:A7:A0:FB:5D:7E:27:31:D7:71:E9:48:4E:BC:DE:F7:1D:5F:0C:3E:0A:29:48:78:2B:C8:3E:E0:EA:69:9E:F4` |
+
+Removing these roots also breaks any legitimate server whose chain ends only at one of them. `emSign Root CA - G1` is not affected and is left alone.
+
+## Requirements
+
+Java 11 or newer. A JDK runs the files directly (`java src/CheckJavaTrust.java`). On a JRE without a compiler, such as a container image, compile them first and run the classes:
+
+```sh
+javac --release 11 -d out src/*.java
+java -cp out CheckJavaTrust
+```
+
+`RemoveEmudhraRoots` still edits the trust stores of older JDKs, including Java 8 (`jre/lib/security/cacerts`, JKS); it just has to run on Java 11 or newer.
+
+## CheckJavaTrust: check what a JVM trusts
+
+```sh
+java src/CheckJavaTrust.java                                  # the two eMudhra test hosts
+java src/CheckJavaTrust.java -v https://example.com/          # any URL, with fingerprints
+java src/CheckJavaTrust.java --cacert /path/to/cacerts        # another trust store
+```
+
+Each URL gets a verdict. The test hosts serve chains signed with the compromised keys, so for them **REJECTED is GOOD**; for any other URL, TRUSTED is GOOD.
+
+```
+VERDICT: GOOD - compromised chain rejected
+==> GOOD: all 2 URLs behave as expected.
+```
+
+Exit code: `0` all GOOD, `1` any BAD, `2` inconclusive (network error, or `-k`).
+
+In a JRE-only container, compile on the host and mount the classes:
+
+```sh
+javac --release 11 -d /tmp/check-java-trust src/CheckJavaTrust.java
+docker run --rm -v /tmp/check-java-trust:/check-java-trust:ro --entrypoint java <image> -cp /check-java-trust CheckJavaTrust
+```
+
+## RemoveEmudhraRoots: remove the roots
+
+```sh
+java src/RemoveEmudhraRoots.java --all-jdks          # dry run: report only
+sudo "$(/usr/libexec/java_home)/bin/java" src/RemoveEmudhraRoots.java --apply
+```
+
+- Targets the given files, or by default `/etc/ssl/cert.pem` and the running JVM's `cacerts`. `--all-jdks` adds every JDK under `/Library/Java/JavaVirtualMachines` and `~/Library/Java/JavaVirtualMachines`.
+- Matches the roots by SHA-256 fingerprint, so vendor-specific aliases don't matter. Handles PEM bundles and PKCS12/JKS keystores (JKS for Java 8), keeping each in its format.
+- **Dry run unless `--apply`.** With `--apply` it writes a `<file>.bak-emsign` backup (never overwriting an existing one), rewrites the file in place (keeping owner and permissions), and verifies the result. Running it again changes nothing.
+- Exit code: `0` clean, `1` a root remains, `2` error (for example, a root-owned file without `sudo`).
+- `--storepass` sets the keystore password; the default is the JDK's `changeit`.
+
+To undo, copy the backup back: `sudo cp -p /etc/ssl/cert.pem.bak-emsign /etc/ssl/cert.pem`.
+
+**Updates restore the roots.** A JDK, IDE or macOS update replaces these files. Re-run the dry run after updating until vendors ship fixed trust stores. JDKs bundled in applications (IDEs, profilers) are not found by `--all-jdks`; pass their `cacerts` explicitly.
+
+## License
+
+[Apache License 2.0](LICENSE)
