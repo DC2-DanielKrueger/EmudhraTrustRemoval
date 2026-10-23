@@ -2,6 +2,7 @@
 
 Dependency-free Java tools for the October 2026 eMudhra CA compromise:
 
+- **FullCheck** runs all checks below on this system, with one GOOD/BAD summary. Start here.
 - **CheckJavaTrust** checks whether a JVM (or any trust store) still trusts the compromised certificates.
 - **CheckInstalledNode** finds installed Node.js versions and checks that each is a fixed release.
 - **RemoveEmudhraRoots** removes the affected roots from PEM bundles and Java keystores.
@@ -31,10 +32,33 @@ Java 11 or newer. A JDK runs the files directly (`java src/CheckJavaTrust.java`)
 
 ```sh
 javac --release 11 -d out src/*.java
-java -cp out CheckJavaTrust          # or CheckInstalledNode, RemoveEmudhraRoots
+java -cp out FullCheck               # or CheckJavaTrust, CheckInstalledNode, RemoveEmudhraRoots
 ```
 
 `RemoveEmudhraRoots` still edits the trust stores of older JDKs, including Java 8 (`jre/lib/security/cacerts`, JKS); it just has to run on Java 11 or newer.
+
+## FullCheck: check this system
+
+```sh
+java src/FullCheck.java
+```
+
+No arguments, changes nothing. It runs, each in its own JVM:
+
+1. `CheckJavaTrust`: the JVM running FullCheck rejects both compromised chains.
+2. `RemoveEmudhraRoots --all-jdks` as a dry run: neither root is in `/etc/ssl/cert.pem`, this JVM's `cacerts` or any installed JDK's.
+3. `CheckInstalledNode`: every installed Node.js is a fixed release and rejects both chains.
+
+```
+############ Summary
+  GOOD   This JVM rejects the compromised chains
+  GOOD   Trust stores (/etc/ssl/cert.pem, this JVM, installed JDKs)
+  GOOD   Installed Node.js
+
+==> GOOD: no exposure to the eMudhra CA compromise found.
+```
+
+Exit code: `0` all GOOD, `1` any BAD, `2` a check could not run. On Java 11-21, run it from the repository root (or `src/`) so it finds the other tools; Java 22+ and compiled classes work from anywhere.
 
 ## CheckJavaTrust: check what a JVM trusts
 
@@ -95,7 +119,7 @@ sudo "$(/usr/libexec/java_home)/bin/java" src/RemoveEmudhraRoots.java --apply
 - Targets the given files, or by default `/etc/ssl/cert.pem` and the running JVM's `cacerts`. `--all-jdks` adds every JDK under `/Library/Java/JavaVirtualMachines` and `~/Library/Java/JavaVirtualMachines`.
 - Matches the roots by SHA-256 fingerprint, so vendor-specific aliases don't matter. Handles PEM bundles and PKCS12/JKS keystores (JKS for Java 8), keeping each in its format.
 - **Dry run unless `--apply`.** With `--apply` it writes a `<file>.bak-emsign` backup (never overwriting an existing one), rewrites the file in place (keeping owner and permissions), and verifies the result. Running it again changes nothing.
-- Exit code: `0` clean, `1` a root remains, `2` error (for example, a root-owned file without `sudo`).
+- Exit code: `0` clean, `1` a root remains (in a dry run: would be removed), `2` error (for example, a root-owned file without `sudo`).
 - `--storepass` sets the keystore password; the default is the JDK's `changeit`.
 
 To undo, copy the backup back: `sudo cp -p /etc/ssl/cert.pem.bak-emsign /etc/ssl/cert.pem`.

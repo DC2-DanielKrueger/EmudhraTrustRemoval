@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
  * </pre>
  *
  * Without FILEs it targets /etc/ssl/cert.pem and the running JVM's cacerts. Dry run unless
- * --apply. Exit code 0 if every target is clean afterwards (or would be), 1 if one still holds a
+ * --apply. Exit code 0 if every target is clean (afterwards, with --apply), 1 if one still holds a
  * root, 2 on errors.
  */
 public class RemoveEmudhraRoots {
@@ -83,13 +83,13 @@ public class RemoveEmudhraRoots {
             worst = Math.max(worst, process(target));
         }
         System.out.println();
-        System.out.println(worst == 0 ? "==> GOOD: " + (apply ? "no target trusts either root." : "nothing to do, or --apply would clean every target.")
-                : worst == 1 ? "==> BAD: a target still trusts a compromised root."
+        System.out.println(worst == 0 ? "==> GOOD: no target trusts either root."
+                : worst == 1 ? "==> BAD: a target still trusts a compromised root." + (apply ? "" : " Re-run with --apply to remove it.")
                 : "==> ERROR: some targets could not be processed (see above).");
         System.exit(worst);
     }
 
-    /** 0 = clean (or cleanable in dry run), 1 = still contains a root, 2 = error. */
+    /** 0 = clean, 1 = still contains a root (in a dry run: would be removed), 2 = error. */
     private static int process(Path target) {
         try {
             if (!Files.isRegularFile(target)) {
@@ -129,7 +129,7 @@ public class RemoveEmudhraRoots {
         System.out.println("  PEM bundle, " + total + " certificates");
         if (removed.isEmpty()) { System.out.println("  clean: contains neither root"); return 0; }
         report(removed);
-        if (!apply) return 0;
+        if (!apply) return 1;
         backup(target, content);
         Files.write(target, kept.toString().getBytes(StandardCharsets.UTF_8)); // in place: keeps owner and mode
         System.out.println("  written: " + (total - removed.size()) + " certificates left");
@@ -149,7 +149,7 @@ public class RemoveEmudhraRoots {
         System.out.println("  " + ks.getType() + " keystore, " + ks.size() + " entries");
         if (removed.isEmpty()) { System.out.println("  clean: contains neither root"); return 0; }
         report(removed);
-        if (!apply) return 0;
+        if (!apply) return 1;
         backup(target, content);
         for (String alias : removedAliases) ks.deleteEntry(alias);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
